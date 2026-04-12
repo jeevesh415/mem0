@@ -34,6 +34,8 @@ import { LangchainLLM } from "../llms/langchain";
 import { LangchainEmbedder } from "../embeddings/langchain";
 import { LangchainVectorStore } from "../vector_stores/langchain";
 import { AzureAISearch } from "../vector_stores/azure_ai_search";
+import { PGVector } from "../vector_stores/pgvector";
+import { DeepSeekLLM } from "../llms/deepseek";
 
 export class EmbedderFactory {
   static create(provider: string, config: EmbeddingConfig): Embedder {
@@ -81,6 +83,8 @@ export class LLMFactory {
         return new MistralLLM(config);
       case "langchain":
         return new LangchainLLM(config);
+      case "deepseek":
+        return new DeepSeekLLM(config);
       default:
         throw new Error(`Unsupported LLM provider: ${provider}`);
     }
@@ -104,6 +108,8 @@ export class VectorStoreFactory {
         return new VectorizeDB(config as any);
       case "azure-ai-search":
         return new AzureAISearch(config as any);
+      case "pgvector":
+        return new PGVector(config as any);
       default:
         throw new Error(`Unsupported vector store provider: ${provider}`);
     }

@@ -4,15 +4,15 @@
   "description": "Mem0 is a self-improving memory layer for LLM applications, enabling personalized AI experiences that save costs and delight users.",
   "theme": "aspen",
   "colors": {
-    "primary": "#9C58FA",
-    "light": "#9C58FA",
-    "dark": "#9C58FA"
+    "primary": "#8F74E0",
+    "light": "#8F74E0",
+    "dark": "#8F74E0"
   },
   "favicon": "/logo/favicon.png",
   "logo": {
     "light": "/logo/light.svg",
     "dark": "/logo/dark.svg",
-    "href": "https://app.mem0.ai/"
+    "href": "https://mem0.ai"
   },
   "navigation": {
     "anchors": [
@@ -40,7 +40,9 @@
                     "icon": "rocket",
                     "pages": [
                       "platform/overview",
+                      "vibecoding",
                       "platform/mem0-mcp",
+                      "platform/cli",
                       "platform/platform-vs-oss",
                       "platform/quickstart"
                     ]
@@ -68,7 +70,6 @@
                           "platform/features/v2-memory-filters",
                           "platform/features/entity-scoped-memory",
                           "platform/features/async-client",
-                          "platform/features/async-mode-default-change",
                           "platform/features/multimodal-support",
                           "platform/features/custom-categories"
                         ]
@@ -77,7 +78,6 @@
                         "group": "Advanced Features",
                         "icon": "bolt",
                         "pages": [
-                          "platform/features/graph-memory",
                           "platform/features/graph-threshold",
                           "platform/features/advanced-retrieval",
                           "platform/advanced-memory-operations",
@@ -92,8 +92,7 @@
                         "pages": [
                           "platform/features/direct-import",
                           "platform/features/memory-export",
-                          "platform/features/timestamp",
-                          "platform/features/expiration-date"
+                          "platform/features/timestamp"
                         ]
                       },
                       {
@@ -120,8 +119,6 @@
                     "icon": "arrow-right",
                     "pages": [
                       "migration/oss-to-platform",
-                      "migration/v0-to-v1",
-                      "migration/breaking-changes",
                       "migration/api-changes"
                     ]
                   },
@@ -135,6 +132,19 @@
                 ]
               },
               {
+                "tab": "OpenClaw",
+                "groups": [
+                  {
+                    "group": "Agent Harness",
+                    "icon": "robot",
+                    "pages": [
+                      "integrations/openclaw",
+                      "integrations/hermes"
+                    ]
+                  }
+                ]
+              },
+              {
                 "tab": "Open Source",
                 "groups": [
                   {
@@ -142,6 +152,7 @@
                     "icon": "rocket",
                     "pages": [
                       "open-source/overview",
+                      "vibecoding",
                       "open-source/python-quickstart",
                       "open-source/node-quickstart"
                     ]
@@ -156,7 +167,7 @@
                       "open-source/features/reranker-search",
                       "open-source/features/async-memory",
                       "open-source/features/multimodal-support",
-                      "open-source/features/custom-fact-extraction-prompt",
+                      "open-source/features/custom-instructions",
                       "open-source/features/custom-update-memory-prompt",
                       "open-source/features/rest-api",
                       "open-source/features/openai_compatibility"
@@ -188,6 +199,7 @@
                               "components/llms/models/google_AI",
                               "components/llms/models/aws_bedrock",
                               "components/llms/models/deepseek",
+                              "components/llms/models/minimax",
                               "components/llms/models/xAI",
                               "components/llms/models/sarvam",
                               "components/llms/models/lmstudio",
@@ -230,7 +242,8 @@
                               "components/vectordbs/dbs/cassandra",
                               "components/vectordbs/dbs/s3_vectors",
                               "components/vectordbs/dbs/databricks",
-                              "components/vectordbs/dbs/neptune_analytics"
+                              "components/vectordbs/dbs/neptune_analytics",
+                              "components/vectordbs/dbs/turbopuffer"
                             ]
                           }
                         ]
@@ -288,20 +301,6 @@
                     "pages": [
                       "contributing/development",
                       "contributing/documentation"
-                    ]
-                  }
-                ]
-              },
-              {
-                "tab": "OpenMemory",
-                "groups": [
-                  {
-                    "group": "Overview & Quickstart",
-                    "icon": "square-terminal",
-                    "pages": [
-                      "openmemory/overview",
-                      "openmemory/quickstart",
-                      "openmemory/integrations"
                     ]
                   }
                 ]
@@ -402,11 +401,11 @@
                       "integrations/autogen",
                       "integrations/agno",
                       "integrations/camel-ai",
-                      "integrations/openclaw",
                       "integrations/openai-agents-sdk",
                       "integrations/google-ai-adk",
                       "integrations/mastra",
-                      "integrations/vercel-ai-sdk"
+                      "integrations/vercel-ai-sdk",
+                      "integrations/chatdev"
                     ]
                   },
                   {
@@ -435,6 +434,28 @@
                       "integrations/agentops",
                       "integrations/keywords",
                       "integrations/raycast"
+                    ]
+                  }
+                ]
+              },
+              {
+                "tab": "Agent Plugins",
+                "groups": [
+                  {
+                    "group": "Coding Agents",
+                    "icon": "terminal",
+                    "pages": [
+                      "integrations/claude-code",
+                      "integrations/cursor",
+                      "integrations/codex"
+                    ]
+                  },
+                  {
+                    "group": "Agent Harness",
+                    "icon": "robot",
+                    "pages": [
+                      "integrations/openclaw",
+                      "integrations/hermes"
                     ]
                   }
                 ]
@@ -531,10 +552,13 @@
                 "tab": "Release Notes",
                 "groups": [
                   {
-                    "group": "Changelog",
+                    "group": "Release Notes",
                     "icon": "rocket",
                     "pages": [
-                      "changelog"
+                      "changelog/highlights",
+                      "changelog/sdk",
+                      "changelog/platform",
+                      "changelog/openclaw"
                     ]
                   }
                 ]
@@ -588,6 +612,34 @@
     ]
   },
   "redirects": [
+    {
+      "source": "/migration/breaking-changes",
+      "destination": "/"
+    },
+    {
+      "source": "/migration/v0-to-v1",
+      "destination": "/"
+    },
+    {
+      "source": "/platform/features/expiration-date",
+      "destination": "/"
+    },
+    {
+      "source": "/platform/features/async-mode-default-change",
+      "destination": "/"
+    },
+    {
+      "source": "/open-source/features/custom-fact-extraction-prompt",
+      "destination": "/open-source/features/custom-instructions"
+    },
+    {
+      "source": "/platform/features/graph-memory",
+      "destination": "/open-source/features/graph-memory"
+    },
+    {
+      "source": "/changelog",
+      "destination": "/changelog/highlights"
+    },
     {
       "source": "/api-reference/memory/v2-search-memories",
       "destination": "/api-reference/memory/search-memories"
@@ -938,7 +990,7 @@
     },
     {
       "source": "/features/graph-memory",
-      "destination": "/platform/features/graph-memory"
+      "destination": "/open-source/features/graph-memory"
     },
     {
       "source": "/features/:slug",
@@ -1051,6 +1103,18 @@
     {
       "source": "/cookbooks/customer-support-agent",
       "destination": "/cookbooks/operations/support-inbox"
+    },
+    {
+      "source": "/openmemory/overview",
+      "destination": "/introduction"
+    },
+    {
+      "source": "/openmemory/quickstart",
+      "destination": "/introduction"
+    },
+    {
+      "source": "/openmemory/integrations",
+      "destination": "/introduction"
     }
   ]
 }

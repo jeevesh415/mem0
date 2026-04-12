@@ -139,14 +139,14 @@ class MilvusDB(VectorStoreBase):
 
         return memory
 
-    def search(self, query: str, vectors: list, limit: int = 5, filters: dict = None) -> list:
+    def search(self, query: str, vectors: list, top_k: int = 5, filters: dict = None) -> list:
         """
         Search for similar vectors.
 
         Args:
             query (str): Query.
             vectors (List[float]): Query vector.
-            limit (int, optional): Number of results to return. Defaults to 5.
+            top_k (int, optional): Number of results to return. Defaults to 5.
             filters (Dict, optional): Filters to apply to the search. Defaults to None.
 
         Returns:
@@ -156,7 +156,7 @@ class MilvusDB(VectorStoreBase):
         hits = self.client.search(
             collection_name=self.collection_name,
             data=[vectors],
-            limit=limit,
+            limit=top_k,
             filter=query_filter,
             output_fields=["*"],
         )
@@ -181,6 +181,17 @@ class MilvusDB(VectorStoreBase):
             vector (List[float], optional): Updated vector.
             payload (Dict, optional): Updated payload.
         """
+        if vector is None or payload is None:
+            existing = self.client.get(collection_name=self.collection_name, ids=vector_id)
+            if not existing:
+                raise ValueError(f"Vector with id {vector_id} not found in collection {self.collection_name}")
+            if vector is None:
+                vector = existing[0].get("vectors")
+                if vector is None:
+                    raise ValueError(f"Existing record {vector_id} has no vector data")
+            if payload is None:
+                payload = existing[0].get("metadata")
+
         schema = {"id": vector_id, "vectors": vector, "metadata": payload}
         self.client.upsert(collection_name=self.collection_name, data=schema)
 
@@ -224,19 +235,19 @@ class MilvusDB(VectorStoreBase):
         """
         return self.client.get_collection_stats(collection_name=self.collection_name)
 
-    def list(self, filters: dict = None, limit: int = 100) -> list:
+    def list(self, filters: dict = None, top_k: int = 100) -> list:
         """
         List all vectors in a collection.
 
         Args:
             filters (Dict, optional): Filters to apply to the list.
-            limit (int, optional): Number of vectors to return. Defaults to 100.
+            top_k (int, optional): Number of vectors to return. Defaults to 100.
 
         Returns:
             List[OutputData]: List of vectors.
         """
         query_filter = self._create_filter(filters) if filters else None
-        result = self.client.query(collection_name=self.collection_name, filter=query_filter, limit=limit)
+        result = self.client.query(collection_name=self.collection_name, filter=query_filter, limit=top_k)
         memories = []
         for data in result:
             obj = OutputData(id=data.get("id"), score=None, payload=data.get("metadata"))

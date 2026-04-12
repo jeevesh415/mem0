@@ -51,7 +51,7 @@ describeIntegration("MemoryClient Integration — CRUD", () => {
         },
       ];
 
-      const result = await client.add(messages, { user_id: TEST_USER_ID });
+      const result = await client.add(messages, { userId: TEST_USER_ID });
 
       // API processes memories asynchronously — returns PENDING
       expect(Array.isArray(result)).toBe(true);
@@ -60,7 +60,7 @@ describeIntegration("MemoryClient Integration — CRUD", () => {
       // Validate response shape
       for (const item of result) {
         expect(item).toHaveProperty("status");
-        expect(item).toHaveProperty("event_id");
+        expect(item).toHaveProperty("eventId");
       }
     });
 
@@ -76,7 +76,7 @@ describeIntegration("MemoryClient Integration — CRUD", () => {
         },
       ];
 
-      const result = await client.add(messages, { user_id: TEST_USER_ID });
+      const result = await client.add(messages, { userId: TEST_USER_ID });
       expect(Array.isArray(result)).toBe(true);
     });
 
@@ -103,17 +103,17 @@ describeIntegration("MemoryClient Integration — CRUD", () => {
       expect(memory.id).toBe(memoryId);
       expect(typeof memory.memory).toBe("string");
       expect(memory.memory!.length).toBeGreaterThan(0);
-      expect(typeof memory.user_id).toBe("string");
+      expect(typeof memory.userId).toBe("string");
       expect(
         memory.metadata === null || typeof memory.metadata === "object",
       ).toBe(true);
       expect(
         Array.isArray(memory.categories) || memory.categories === null,
       ).toBe(true);
-      expect(new Date(memory.created_at || "").toString()).not.toBe(
+      expect(new Date(memory.createdAt || "").toString()).not.toBe(
         "Invalid Date",
       );
-      expect(new Date(memory.updated_at || "").toString()).not.toBe(
+      expect(new Date(memory.updatedAt || "").toString()).not.toBe(
         "Invalid Date",
       );
     });
@@ -122,7 +122,9 @@ describeIntegration("MemoryClient Integration — CRUD", () => {
   // ─── Get all ──────────────────────────────────────────────
   describe("get all memories", () => {
     test("returns all memories for test user", async () => {
-      const memories = await client.getAll({ user_id: TEST_USER_ID });
+      const memories = await client.getAll({
+        filters: { userId: TEST_USER_ID },
+      });
 
       expect(Array.isArray(memories)).toBe(true);
       expect(memories.length).toBeGreaterThanOrEqual(memoryIds.length);
@@ -135,9 +137,9 @@ describeIntegration("MemoryClient Integration — CRUD", () => {
 
     test("returns paginated results with page and page_size", async () => {
       const page1 = await client.getAll({
-        user_id: TEST_USER_ID,
+        filters: { userId: TEST_USER_ID },
         page: 1,
-        page_size: 1,
+        pageSize: 1,
       });
 
       // Paginated response is an object with results array
@@ -177,7 +179,49 @@ describeIntegration("MemoryClient Integration — CRUD", () => {
     });
   });
 
+  // ─── Edge cases ──────────────────────────────────────────
+  describe("edge cases", () => {
+    test("add with metadata attaches metadata to the memory", async () => {
+      const result = await client.add(
+        [
+          { role: "user" as const, content: "I prefer dark mode in all apps." },
+          {
+            role: "assistant" as const,
+            content: "Noted, dark mode preference saved!",
+          },
+        ],
+        {
+          userId: TEST_USER_ID,
+          metadata: { source: "integration-test", category: "preferences" },
+        },
+      );
+
+      expect(Array.isArray(result)).toBe(true);
+      expect(result.length).toBeGreaterThan(0);
+    });
+
+    test("getAll for non-existent user returns empty array", async () => {
+      const memories = await client.getAll({
+        filters: { userId: `nonexistent-user-${randomUUID()}` },
+      });
+
+      expect(Array.isArray(memories)).toBe(true);
+      expect(memories.length).toBe(0);
+    });
+
+    test("deleteAll for non-existent user does not throw", async () => {
+      const result = await client.deleteAll({
+        userId: `nonexistent-user-${randomUUID()}`,
+      });
+
+      expect(result).toBeDefined();
+      expect(typeof result.message).toBe("string");
+    });
+  });
+
   // ─── Delete single ────────────────────────────────────────
+  // NOTE: Delete tests run last to avoid race conditions with
+  // other tests that depend on the seeded memories.
   describe("delete memory", () => {
     test("deletes a single memory by ID", async () => {
       const memoryId = memoryIds[0];
@@ -194,56 +238,16 @@ describeIntegration("MemoryClient Integration — CRUD", () => {
     });
   });
 
-  // ─── Edge cases ──────────────────────────────────────────
-  describe("edge cases", () => {
-    test("add with metadata attaches metadata to the memory", async () => {
-      const result = await client.add(
-        [
-          { role: "user" as const, content: "I prefer dark mode in all apps." },
-          {
-            role: "assistant" as const,
-            content: "Noted, dark mode preference saved!",
-          },
-        ],
-        {
-          user_id: TEST_USER_ID,
-          metadata: { source: "integration-test", category: "preferences" },
-        },
-      );
-
-      expect(Array.isArray(result)).toBe(true);
-      expect(result.length).toBeGreaterThan(0);
-    });
-
-    test("getAll for non-existent user returns empty array", async () => {
-      const memories = await client.getAll({
-        user_id: `nonexistent-user-${randomUUID()}`,
-      });
-
-      expect(Array.isArray(memories)).toBe(true);
-      expect(memories.length).toBe(0);
-    });
-
-    test("deleteAll for non-existent user does not throw", async () => {
-      const result = await client.deleteAll({
-        user_id: `nonexistent-user-${randomUUID()}`,
-      });
-
-      expect(result).toBeDefined();
-      expect(typeof result.message).toBe("string");
-    });
-  });
-
   // ─── Delete all + delete user ─────────────────────────────
   describe("cleanup operations", () => {
     test("deletes all memories for test user", async () => {
-      const result = await client.deleteAll({ user_id: TEST_USER_ID });
+      const result = await client.deleteAll({ userId: TEST_USER_ID });
       expect(result).toBeDefined();
       expect(typeof result.message).toBe("string");
     });
 
     test("deletes the test user entity", async () => {
-      const result = await client.deleteUsers({ user_id: TEST_USER_ID });
+      const result = await client.deleteUsers({ userId: TEST_USER_ID });
       expect(result).toBeDefined();
       expect(result.message).toBe("Entity deleted successfully.");
     });
