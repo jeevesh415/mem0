@@ -63,6 +63,24 @@ describe("MemoryClient - search()", () => {
     expect(getFetchBody(call!).filters).toEqual({ user_id: "u1" });
   });
 
+  test("serializes latestOnly as latest_only", async () => {
+    const extra = new Map<string, { status: number; body: unknown }>();
+    extra.set("/v3/memories/search/", {
+      status: 200,
+      body: { results: [] },
+    });
+    const mock = setupMockFetch(extra);
+
+    const client = new MemoryClient({ apiKey: TEST_API_KEY });
+    await client.search("test", {
+      filters: { user_id: "u1" },
+      latestOnly: true,
+    });
+
+    const call = findFetchCall(mock, "/v3/memories/search/", "POST");
+    expect(getFetchBody(call!).latest_only).toBe(true);
+  });
+
   test("passes complex OR filters through to the API body", async () => {
     const extra = new Map<string, { status: number; body: unknown }>();
     extra.set("/v3/memories/search/", {
@@ -254,7 +272,7 @@ describe("MemoryClient - getAll() entity param rejection", () => {
 
   test("accepts filters with user_id", async () => {
     const extra = new Map<string, { status: number; body: unknown }>();
-    extra.set("/v2/memories/", {
+    extra.set("/v3/memories/", {
       status: 200,
       body: { results: [] },
     });
@@ -262,6 +280,24 @@ describe("MemoryClient - getAll() entity param rejection", () => {
 
     const client = new MemoryClient({ apiKey: TEST_API_KEY });
     await client.getAll({ filters: { user_id: "u1" } });
-    expect(findFetchCall(mock, "/v2/memories/", "POST")).toBeDefined();
+    expect(findFetchCall(mock, "/v3/memories/", "POST")).toBeDefined();
+  });
+
+  test("serializes latestOnly as latest_only", async () => {
+    const extra = new Map<string, { status: number; body: unknown }>();
+    extra.set("/v3/memories/", {
+      status: 200,
+      body: { results: [] },
+    });
+    const mock = setupMockFetch(extra);
+
+    const client = new MemoryClient({ apiKey: TEST_API_KEY });
+    await client.getAll({
+      filters: { user_id: "u1" },
+      latestOnly: true,
+    });
+
+    const call = findFetchCall(mock, "/v3/memories/", "POST");
+    expect(getFetchBody(call!).latest_only).toBe(true);
   });
 });

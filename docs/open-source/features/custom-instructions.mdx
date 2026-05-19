@@ -109,23 +109,21 @@ config = {
     "llm": {
         "provider": "openai",
         "config": {
-            "model": "gpt-4.1-nano-2025-04-14",
+            "model": "gpt-5-mini",
             "temperature": 0.2,
             "max_tokens": 2000,
         }
     },
     "custom_instructions": custom_instructions,
-    "version": "v1.1"
 }
 
-m = Memory.from_config(config_dict=config)
+m = Memory.from_config(config)
 ```
 
 ```ts TypeScript
 import { Memory } from "mem0ai/oss";
 
 const config = {
-  version: "v1.1",
   llm: {
     provider: "openai",
     config: {

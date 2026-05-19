@@ -1,6 +1,7 @@
 import axios from "axios";
 import {
   AllUsers,
+  PaginatedMemories,
   ProjectOptions,
   Memory,
   MemoryHistory,
@@ -19,7 +20,18 @@ import {
   CreateMemoryExportPayload,
   GetMemoryExportPayload,
 } from "./mem0.types";
-import { captureClientEvent, generateHash } from "./telemetry";
+import {
+  captureClientEvent,
+  generateHash,
+  isTelemetryEnabled,
+  telemetry,
+} from "./telemetry";
+import {
+  getOrCreateMem0UserId,
+  isMem0Aliased,
+  markMem0Aliased,
+  readMem0AnonIds,
+} from "./config";
 import { camelToSnake, camelToSnakeKeys, snakeToCamelKeys } from "./utils";
 import { createExceptionFromResponse, MemoryError } from "../common/exceptions";
 
@@ -117,6 +129,8 @@ export default class MemoryClient {
         this.telemetryId = generateHash(this.apiKey);
       }
 
+      await this._maybeAliasAnonToEmail();
+
       captureClientEvent("init", this, {
         client_type: "MemoryClient",
       }).catch((error: any) => {
@@ -128,6 +142,30 @@ export default class MemoryClient {
         error: error?.message || "Unknown error",
         stack: error?.stack || "No stack trace",
       });
+    }
+  }
+
+  private async _maybeAliasAnonToEmail(): Promise<void> {
+    if (!isTelemetryEnabled()) return;
+    try {
+      const email = this.telemetryId;
+      if (!email || !email.includes("@")) return;
+      const sharedAnonId = await getOrCreateMem0UserId();
+      const anonIds = await readMem0AnonIds();
+      if (!anonIds && !sharedAnonId) return;
+      const candidates = [anonIds?.oss || sharedAnonId, anonIds?.cli].filter(
+        (id): id is string => !!id && id !== email,
+      );
+      const seen = new Set<string>();
+      for (const anonId of candidates) {
+        if (seen.has(anonId) || (await isMem0Aliased(anonId, email))) continue;
+        seen.add(anonId);
+        if (await telemetry.captureIdentify(anonId, email)) {
+          await markMem0Aliased(anonId, email);
+        }
+      }
+    } catch (error: any) {
+      console.error("Failed to alias telemetry identity:", error);
     }
   }
 
@@ -221,7 +259,7 @@ export default class MemoryClient {
     this._captureEvent("add", [payloadKeys]);
 
     const response = await this._fetchWithErrorHandling(
-      `${this.host}/v3/memories/`,
+      `${this.host}/v3/memories/add/`,
       {
         method: "POST",
         headers: this.headers,
@@ -284,7 +322,7 @@ export default class MemoryClient {
     );
   }
 
-  async getAll(options?: GetAllMemoryOptions): Promise<Array<Memory>> {
+  async getAll(options?: GetAllMemoryOptions): Promise<PaginatedMemories> {
     // Reject top-level entity params - must use filters instead
     rejectTopLevelEntityParams(options as Record<string, any>, "getAll");
 
@@ -293,12 +331,11 @@ export default class MemoryClient {
     this._captureEvent("get_all", [payloadKeys]);
     const { page, pageSize, filters, ...rest } = options ?? {};
     const body: Record<string, any> = {
-      output_format: "v1.1",
       ...camelToSnakeKeys(rest),
       ...(filters && { filters }),
     };
 
-    let url = `${this.host}/v2/memories/`;
+    let url = `${this.host}/v3/memories/`;
     if (page && pageSize) {
       url += `?page=${page}&page_size=${pageSize}`;
     }

@@ -453,6 +453,84 @@ class Memory(MemoryBase):
         except Exception as e:
             logger.warning(f"Entity upsert failed for '{entity_text}': {e}")
 
+    def _remove_memory_from_entity_store(self, memory_id, filters):
+        """Strip `memory_id` from every entity record scoped to `filters`.
+
+        For each entity whose `linked_memory_ids` contains `memory_id`:
+          - remove the id; if the list becomes empty, delete the entity record.
+          - otherwise re-embed the entity text and update the payload
+            (the vector store's update() requires a vector).
+
+        No-op if the entity store has never been initialized in this process.
+        Errors on individual entities are swallowed at debug level; outer
+        failures are swallowed at warning level so the primary delete/update
+        path is never broken by entity cleanup.
+        """
+        if self._entity_store is None:
+            return
+        search_filters = {k: v for k, v in filters.items() if k in ("user_id", "agent_id", "run_id") and v}
+        try:
+            listed = self.entity_store.list(filters=search_filters, top_k=10000)
+            rows = listed[0] if isinstance(listed, (list, tuple)) and listed and isinstance(listed[0], list) else listed
+            for row in rows or []:
+                try:
+                    payload = getattr(row, "payload", None) or {}
+                    linked = payload.get("linked_memory_ids", [])
+                    if not isinstance(linked, list) or memory_id not in linked:
+                        continue
+                    remaining = [mid for mid in linked if mid != memory_id]
+                    if not remaining:
+                        try:
+                            self.entity_store.delete(vector_id=row.id)
+                        except Exception as e:
+                            logger.debug(f"Entity delete failed for id={row.id}: {e}")
+                    else:
+                        entity_text = payload.get("data")
+                        if not isinstance(entity_text, str) or not entity_text:
+                            logger.debug(f"Entity id={row.id} missing 'data'; skipping update during cleanup")
+                            continue
+                        try:
+                            vec = self.embedding_model.embed(entity_text, "update")
+                        except Exception as e:
+                            logger.debug(f"Entity re-embed failed for '{entity_text}': {e}")
+                            continue
+                        new_payload = {**payload, "linked_memory_ids": remaining}
+                        try:
+                            self.entity_store.update(
+                                vector_id=row.id,
+                                vector=vec,
+                                payload=new_payload,
+                            )
+                        except Exception as e:
+                            logger.debug(f"Entity update failed for id={row.id}: {e}")
+                except Exception as e:
+                    logger.debug(f"Entity cleanup error: {e}")
+        except Exception as e:
+            logger.warning(f"Entity store cleanup failed for memory_id={memory_id}: {e}")
+
+    def _link_entities_for_memory(self, memory_id, text, filters):
+        """Extract entities from `text` and link them to `memory_id` in the
+        entity store, scoped to `filters`. Simpler single-memory variant of
+        Phase 7 in add(): per-entity search-then-update-or-insert via the
+        existing `_upsert_entity` helper. Non-fatal on any failure.
+        """
+        try:
+            entities = extract_entities(text)
+            if not entities:
+                return
+            seen = set()
+            for entity_type, entity_text in entities:
+                key = entity_text.strip().lower()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    self._upsert_entity(entity_text, entity_type, memory_id, filters)
+                except Exception as e:
+                    logger.debug(f"Entity link failed for '{entity_text}': {e}")
+        except Exception as e:
+            logger.warning(f"Entity linking failed for memory_id={memory_id}: {e}")
+
     @classmethod
     def from_config(cls, config_dict: Dict[str, Any]):
         try:
@@ -578,10 +656,10 @@ class Memory(MemoryBase):
         else:
             messages = parse_vision_messages(messages)
 
-        vector_store_result = self._add_to_vector_store(messages, processed_metadata, effective_filters, infer)
+        vector_store_result = self._add_to_vector_store(messages, processed_metadata, effective_filters, infer, prompt=prompt)
         return {"results": vector_store_result}
 
-    def _add_to_vector_store(self, messages, metadata, filters, infer):
+    def _add_to_vector_store(self, messages, metadata, filters, infer, prompt=None):
         if not infer:
             returned_memories = []
             for message_dict in messages:
@@ -648,7 +726,7 @@ class Memory(MemoryBase):
         if is_agent_scoped:
             system_prompt += AGENT_CONTEXT_SUFFIX
 
-        custom_instr = self.custom_instructions
+        custom_instr = prompt or self.custom_instructions
 
         user_prompt = generate_additive_extraction_prompt(
             existing_memories=existing_memories,
@@ -1161,15 +1239,15 @@ class Memory(MemoryBase):
     def _process_metadata_filters(self, metadata_filters: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process enhanced metadata filters and convert them to vector store compatible format.
-        
+
         Args:
             metadata_filters: Enhanced metadata filters with operators
-            
+
         Returns:
             Dict of processed filters compatible with vector store
         """
         processed_filters = {}
-        
+
         def process_condition(key: str, condition: Any) -> Dict[str, Any]:
             if not isinstance(condition, dict):
                 # Simple equality: {"key": "value"}
@@ -1177,7 +1255,7 @@ class Memory(MemoryBase):
                     # Wildcard: match everything for this field (implementation depends on vector store)
                     return {key: "*"}
                 return {key: condition}
-            
+
             result = {}
             for operator, value in condition.items():
                 # Map platform operators to universal format that can be translated by each vector store
@@ -1193,6 +1271,14 @@ class Memory(MemoryBase):
                     raise ValueError(f"Unsupported metadata filter operator: {operator}")
             return result
 
+        def merge_filters(target: Dict[str, Any], source: Dict[str, Any]) -> None:
+            """Merge source into target, deep-merging nested operator dicts for the same key."""
+            for key, value in source.items():
+                if key in target and isinstance(target[key], dict) and isinstance(value, dict):
+                    target[key].update(value)
+                else:
+                    target[key] = value
+
         for key, value in metadata_filters.items():
             if key == "AND":
                 # Logical AND: combine multiple conditions
@@ -1200,7 +1286,7 @@ class Memory(MemoryBase):
                     raise ValueError("AND operator requires a list of conditions")
                 for condition in value:
                     for sub_key, sub_value in condition.items():
-                        processed_filters.update(process_condition(sub_key, sub_value))
+                        merge_filters(processed_filters, process_condition(sub_key, sub_value))
             elif key == "OR":
                 # Logical OR: Pass through to vector store for implementation-specific handling
                 if not isinstance(value, list) or not value:
@@ -1210,7 +1296,7 @@ class Memory(MemoryBase):
                 for condition in value:
                     or_condition = {}
                     for sub_key, sub_value in condition.items():
-                        or_condition.update(process_condition(sub_key, sub_value))
+                        merge_filters(or_condition, process_condition(sub_key, sub_value))
                     processed_filters["$or"].append(or_condition)
             elif key == "NOT":
                 # Logical NOT: Pass through to vector store for implementation-specific handling
@@ -1220,11 +1306,11 @@ class Memory(MemoryBase):
                 for condition in value:
                     not_condition = {}
                     for sub_key, sub_value in condition.items():
-                        not_condition.update(process_condition(sub_key, sub_value))
+                        merge_filters(not_condition, process_condition(sub_key, sub_value))
                     processed_filters["$not"].append(not_condition)
             else:
-                processed_filters.update(process_condition(key, value))
-        
+                merge_filters(processed_filters, process_condition(key, value))
+
         return processed_filters
 
     def _has_advanced_operators(self, filters: Dict[str, Any]) -> bool:
@@ -1624,6 +1710,13 @@ class Memory(MemoryBase):
             actor_id=new_metadata.get("actor_id"),
             role=new_metadata.get("role"),
         )
+
+        # Entity-store cleanup: strip this memory's id from old-text entities,
+        # then re-extract entities from the new text and link them back.
+        session_filters = {k: new_metadata[k] for k in ("user_id", "agent_id", "run_id") if new_metadata.get(k)}
+        self._remove_memory_from_entity_store(memory_id, session_filters)
+        self._link_entities_for_memory(memory_id, data, session_filters)
+
         return memory_id
 
     def _delete_memory(self, memory_id, existing_memory=None):
@@ -1635,6 +1728,8 @@ class Memory(MemoryBase):
         prev_value = existing_memory.payload.get("data", "")
         created_at = _normalize_iso_timestamp_to_utc(existing_memory.payload.get("created_at"))
         updated_at = datetime.now(timezone.utc).isoformat()
+        payload = existing_memory.payload or {}
+        session_filters = {k: payload[k] for k in ("user_id", "agent_id", "run_id") if payload.get(k)}
         self.vector_store.delete(vector_id=memory_id)
         self.db.add_history(
             memory_id,
@@ -1647,6 +1742,11 @@ class Memory(MemoryBase):
             role=existing_memory.payload.get("role"),
             is_deleted=1,
         )
+
+        # Entity-store cleanup: strip this memory's id from any entity records
+        # that linked to it. Non-fatal — the helper swallows errors.
+        self._remove_memory_from_entity_store(memory_id, session_filters)
+
         return memory_id
 
     def reset(self):
@@ -1753,6 +1853,114 @@ class AsyncMemory(MemoryBase):
             )
         return self._entity_store
 
+    async def _upsert_entity_async(self, entity_text, entity_type, memory_id, filters):
+        """Async variant of `_upsert_entity` — per-entity search-then-update-or-insert."""
+        try:
+            entity_embedding = await asyncio.to_thread(self.embedding_model.embed, entity_text, "add")
+            search_filters = {k: v for k, v in filters.items() if k in ("user_id", "agent_id", "run_id") and v}
+
+            existing = await asyncio.to_thread(
+                self.entity_store.search,
+                query=entity_text,
+                vectors=entity_embedding,
+                top_k=1,
+                filters=search_filters,
+            )
+
+            if existing and existing[0].score >= 0.95:
+                match = existing[0]
+                payload = match.payload or {}
+                linked_ids = payload.get("linked_memory_ids", [])
+                if memory_id not in linked_ids:
+                    linked_ids.append(memory_id)
+                    payload["linked_memory_ids"] = linked_ids
+                    await asyncio.to_thread(
+                        self.entity_store.update,
+                        vector_id=match.id,
+                        vector=None,
+                        payload=payload,
+                    )
+            else:
+                entity_id = str(uuid.uuid4())
+                entity_payload = {
+                    "data": entity_text,
+                    "entity_type": entity_type,
+                    "linked_memory_ids": [memory_id],
+                    **{k: v for k, v in search_filters.items()},
+                }
+                await asyncio.to_thread(
+                    self.entity_store.insert,
+                    vectors=[entity_embedding],
+                    ids=[entity_id],
+                    payloads=[entity_payload],
+                )
+        except Exception as e:
+            logger.warning(f"Entity upsert failed for '{entity_text}' (async): {e}")
+
+    async def _remove_memory_from_entity_store(self, memory_id, filters):
+        """Async variant of `Memory._remove_memory_from_entity_store`."""
+        if self._entity_store is None:
+            return
+        search_filters = {k: v for k, v in filters.items() if k in ("user_id", "agent_id", "run_id") and v}
+        try:
+            listed = await asyncio.to_thread(self.entity_store.list, filters=search_filters, top_k=10000)
+            rows = listed[0] if isinstance(listed, (list, tuple)) and listed and isinstance(listed[0], list) else listed
+            for row in rows or []:
+                try:
+                    payload = getattr(row, "payload", None) or {}
+                    linked = payload.get("linked_memory_ids", [])
+                    if not isinstance(linked, list) or memory_id not in linked:
+                        continue
+                    remaining = [mid for mid in linked if mid != memory_id]
+                    if not remaining:
+                        try:
+                            await asyncio.to_thread(self.entity_store.delete, vector_id=row.id)
+                        except Exception as e:
+                            logger.debug(f"Entity delete failed for id={row.id} (async): {e}")
+                    else:
+                        entity_text = payload.get("data")
+                        if not isinstance(entity_text, str) or not entity_text:
+                            logger.debug(f"Entity id={row.id} missing 'data'; skipping update during cleanup (async)")
+                            continue
+                        try:
+                            vec = await asyncio.to_thread(self.embedding_model.embed, entity_text, "update")
+                        except Exception as e:
+                            logger.debug(f"Entity re-embed failed for '{entity_text}' (async): {e}")
+                            continue
+                        new_payload = {**payload, "linked_memory_ids": remaining}
+                        try:
+                            await asyncio.to_thread(
+                                self.entity_store.update,
+                                vector_id=row.id,
+                                vector=vec,
+                                payload=new_payload,
+                            )
+                        except Exception as e:
+                            logger.debug(f"Entity update failed for id={row.id} (async): {e}")
+                except Exception as e:
+                    logger.debug(f"Entity cleanup error (async): {e}")
+        except Exception as e:
+            logger.warning(f"Entity store cleanup failed for memory_id={memory_id} (async): {e}")
+
+    async def _link_entities_for_memory(self, memory_id, text, filters):
+        """Async variant of `Memory._link_entities_for_memory`."""
+        try:
+            entities = await asyncio.to_thread(extract_entities, text)
+            if not entities:
+                return
+            seen = set()
+            for entity_type, entity_text in entities:
+                key = entity_text.strip().lower()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    await self._upsert_entity_async(entity_text, entity_type, memory_id, filters)
+                except Exception as e:
+                    logger.debug(f"Entity link failed for '{entity_text}' (async): {e}")
+        except Exception as e:
+            logger.warning(f"Entity linking failed for memory_id={memory_id} (async): {e}")
+
     @classmethod
     def from_config(cls, config_dict: Dict[str, Any]):
         try:
@@ -1856,7 +2064,7 @@ class AsyncMemory(MemoryBase):
         else:
             messages = parse_vision_messages(messages)
 
-        vector_store_result = await self._add_to_vector_store(messages, processed_metadata, effective_filters, infer)
+        vector_store_result = await self._add_to_vector_store(messages, processed_metadata, effective_filters, infer, prompt=prompt)
         return {"results": vector_store_result}
 
     async def _add_to_vector_store(
@@ -1865,6 +2073,7 @@ class AsyncMemory(MemoryBase):
         metadata: dict,
         effective_filters: dict,
         infer: bool,
+        prompt: Optional[str] = None,
     ):
         if not infer:
             returned_memories = []
@@ -1933,7 +2142,7 @@ class AsyncMemory(MemoryBase):
         if is_agent_scoped:
             system_prompt += AGENT_CONTEXT_SUFFIX
 
-        custom_instr = self.custom_instructions
+        custom_instr = prompt or self.custom_instructions
 
         user_prompt = generate_additive_extraction_prompt(
             existing_memories=existing_memories,
@@ -2482,6 +2691,14 @@ class AsyncMemory(MemoryBase):
                     raise ValueError(f"Unsupported metadata filter operator: {operator}")
             return result
 
+        def merge_filters(target: Dict[str, Any], source: Dict[str, Any]) -> None:
+            """Merge source into target, deep-merging nested operator dicts for the same key."""
+            for key, value in source.items():
+                if key in target and isinstance(target[key], dict) and isinstance(value, dict):
+                    target[key].update(value)
+                else:
+                    target[key] = value
+
         for key, value in metadata_filters.items():
             if key == "AND":
                 # Logical AND: combine multiple conditions
@@ -2489,7 +2706,7 @@ class AsyncMemory(MemoryBase):
                     raise ValueError("AND operator requires a list of conditions")
                 for condition in value:
                     for sub_key, sub_value in condition.items():
-                        processed_filters.update(process_condition(sub_key, sub_value))
+                        merge_filters(processed_filters, process_condition(sub_key, sub_value))
             elif key == "OR":
                 # Logical OR: Pass through to vector store for implementation-specific handling
                 if not isinstance(value, list) or not value:
@@ -2499,7 +2716,7 @@ class AsyncMemory(MemoryBase):
                 for condition in value:
                     or_condition = {}
                     for sub_key, sub_value in condition.items():
-                        or_condition.update(process_condition(sub_key, sub_value))
+                        merge_filters(or_condition, process_condition(sub_key, sub_value))
                     processed_filters["$or"].append(or_condition)
             elif key == "NOT":
                 # Logical NOT: Pass through to vector store for implementation-specific handling
@@ -2509,10 +2726,10 @@ class AsyncMemory(MemoryBase):
                 for condition in value:
                     not_condition = {}
                     for sub_key, sub_value in condition.items():
-                        not_condition.update(process_condition(sub_key, sub_value))
+                        merge_filters(not_condition, process_condition(sub_key, sub_value))
                     processed_filters["$not"].append(not_condition)
             else:
-                processed_filters.update(process_condition(key, value))
+                merge_filters(processed_filters, process_condition(key, value))
 
         return processed_filters
 
@@ -2792,6 +3009,7 @@ class AsyncMemory(MemoryBase):
         if "created_at" not in new_metadata:
             new_metadata["created_at"] = datetime.now(timezone.utc).isoformat()
         new_metadata["updated_at"] = new_metadata["created_at"]
+        new_metadata["text_lemmatized"] = lemmatize_for_bm25(data)
 
         await asyncio.to_thread(
             self.vector_store.insert,
@@ -2926,6 +3144,13 @@ class AsyncMemory(MemoryBase):
             actor_id=new_metadata.get("actor_id"),
             role=new_metadata.get("role"),
         )
+
+        # Entity-store cleanup: strip this memory's id from old-text entities,
+        # then re-extract entities from the new text and link them back.
+        session_filters = {k: new_metadata[k] for k in ("user_id", "agent_id", "run_id") if new_metadata.get(k)}
+        await self._remove_memory_from_entity_store(memory_id, session_filters)
+        await self._link_entities_for_memory(memory_id, data, session_filters)
+
         return memory_id
 
     async def _delete_memory(self, memory_id, existing_memory=None):
@@ -2937,6 +3162,8 @@ class AsyncMemory(MemoryBase):
         prev_value = existing_memory.payload.get("data", "")
         created_at = _normalize_iso_timestamp_to_utc(existing_memory.payload.get("created_at"))
         updated_at = datetime.now(timezone.utc).isoformat()
+        payload = existing_memory.payload or {}
+        session_filters = {k: payload[k] for k in ("user_id", "agent_id", "run_id") if payload.get(k)}
 
         await asyncio.to_thread(self.vector_store.delete, vector_id=memory_id)
         await asyncio.to_thread(
@@ -2951,6 +3178,10 @@ class AsyncMemory(MemoryBase):
             role=existing_memory.payload.get("role"),
             is_deleted=1,
         )
+
+        # Entity-store cleanup: strip this memory's id from any entity records
+        # that linked to it. Non-fatal — the helper swallows errors.
+        await self._remove_memory_from_entity_store(memory_id, session_filters)
 
         return memory_id
 
